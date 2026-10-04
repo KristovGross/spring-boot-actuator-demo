@@ -1,0 +1,25 @@
+services:
+  actuator-demo:
+    build:
+      context: ../../..
+      dockerfile: CI-CD/deploy/docker/Dockerfile
+    image: liverpool-actuator-demo:1.0.0
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    networks:
+      - observability
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - actuator-demo
+    restart: unless-stopped
+    networks:
+      - observability
+networks:
+  observability:
+    driver: bridge
