@@ -4,6 +4,8 @@ services:
       context: ../../..
       dockerfile: CI-CD/deploy/docker/Dockerfile
     image: liverpool-actuator-demo:1.0.0
+    env_file:
+      - ../environments/dev/app.env
     ports:
       - "8080:8080"
     restart: unless-stopped
