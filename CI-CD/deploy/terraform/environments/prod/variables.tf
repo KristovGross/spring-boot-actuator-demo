@@ -13,13 +13,13 @@ variable "project_name" {
 variable "environment" {
   description = "Ambiente"
   type        = string
-  default     = "dev"
+  default     = "prod"
 }
 
 variable "vpc_cidr" {
   description = "CIDR principal de la VPC"
   type        = string
-  default     = "10.10.0.0/16"
+  default     = "10.30.0.0/16"
 }
 
 variable "public_subnet_cidrs" {
@@ -27,8 +27,8 @@ variable "public_subnet_cidrs" {
   type        = list(string)
 
   default = [
-    "10.10.1.0/24",
-    "10.10.2.0/24"
+    "10.30.1.0/24",
+    "10.30.2.0/24"
   ]
 }
 
@@ -37,8 +37,8 @@ variable "private_subnet_cidrs" {
   type        = list(string)
 
   default = [
-    "10.10.11.0/24",
-    "10.10.12.0/24"
+    "10.30.11.0/24",
+    "10.30.12.0/24"
   ]
 }
 

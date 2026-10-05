@@ -23,3 +23,9 @@ variable "app_port" {
   type        = number
   default     = 8080
 }
+
+variable "enable_deletion_protection" {
+  description = "Habilita proteccion contra eliminacion accidental del ALB"
+  type        = bool
+  default     = false
+}

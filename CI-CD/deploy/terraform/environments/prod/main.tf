@@ -11,7 +11,7 @@ module "network" {
 
   availability_zones = var.availability_zones
 
-  enable_nat_gateway = false
+  enable_nat_gateway = true
 }
 
 module "ecr" {
@@ -20,7 +20,7 @@ module "ecr" {
   project_name = var.project_name
   environment  = var.environment
 
-  force_delete = true
+  force_delete = false
 }
 
 module "alb" {
@@ -33,6 +33,8 @@ module "alb" {
   public_subnet_ids = module.network.public_subnet_ids
 
   app_port = 8080
+
+  enable_deletion_protection = true
 }
 
 module "monitoring" {
@@ -41,7 +43,7 @@ module "monitoring" {
   project_name = var.project_name
   environment  = var.environment
 
-  log_retention_days = 7
+  log_retention_days = 30
 }
 
 module "ecs" {
@@ -53,9 +55,10 @@ module "ecs" {
 
   vpc_id = module.network.vpc_id
 
+
   subnet_ids = module.network.public_subnet_ids
 
-  assign_public_ip = true
+  assign_public_ip = false
 
   alb_security_group_id = module.alb.alb_security_group_id
   target_group_arn      = module.alb.target_group_arn
@@ -67,10 +70,10 @@ module "ecs" {
   container_name = "actuator-demo"
   container_port = 8080
 
-  task_cpu    = 256
-  task_memory = 512
+  task_cpu    = 512
+  task_memory = 1024
 
-  desired_count = 1
+  desired_count = 2
 
   image_tag = var.image_tag
 }

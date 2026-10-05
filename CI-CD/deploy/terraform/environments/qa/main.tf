@@ -41,7 +41,7 @@ module "monitoring" {
   project_name = var.project_name
   environment  = var.environment
 
-  log_retention_days = 7
+  log_retention_days = 14
 }
 
 module "ecs" {
@@ -67,8 +67,8 @@ module "ecs" {
   container_name = "actuator-demo"
   container_port = 8080
 
-  task_cpu    = 256
-  task_memory = 512
+  task_cpu    = 512
+  task_memory = 1024
 
   desired_count = 1
 

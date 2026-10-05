@@ -27,3 +27,9 @@ variable "availability_zones" {
   description = "Availability Zones utilizadas"
   type        = list(string)
 }
+
+variable "enable_nat_gateway" {
+  description = "Habilita NAT Gateway para subredes privadas"
+  type        = bool
+  default     = false
+}
