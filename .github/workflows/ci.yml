@@ -3,12 +3,12 @@ name: CI - Build, Test and Security
 on:
   push:
     branches:
-      - main
+      - master
       - feature/devops-challenge
 
   pull_request:
     branches:
-      - main
+      - master
 
   workflow_dispatch:
 

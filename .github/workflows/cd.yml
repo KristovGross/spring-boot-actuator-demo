@@ -130,7 +130,7 @@ jobs:
 
     if: |
       inputs.deploy == true &&
-      github.ref == 'refs/heads/main'
+      github.ref == 'refs/heads/master'
 
     environment: ${{ inputs.environment }}
 

@@ -37,5 +37,5 @@ variable "github_repository_id" {
 variable "deployment_branch" {
   description = "Branch autorizado para asumir el IAM Role"
   type        = string
-  default     = "main"
+  default     = "master"
 }
