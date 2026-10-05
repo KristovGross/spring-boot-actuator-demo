@@ -1,0 +1,99 @@
+name: CI - Build, Test and Security
+
+on:
+  push:
+    branches:
+      - master
+      - feature/devops-challenge
+
+  pull_request:
+    branches:
+      - master
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: liverpool-actuator-demo
+
+jobs:
+
+  build-test:
+    name: Compilar, probar y validar
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # --------------------------------------------------------
+      # Código fuente
+      # --------------------------------------------------------
+      - name: Obtener código fuente
+        uses: actions/checkout@v7
+
+      # --------------------------------------------------------
+      # Java / Maven
+      # --------------------------------------------------------
+      - name: Configurar Java 8
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "8"
+          cache: maven
+
+      - name: Dar permisos al Maven Wrapper
+        run: chmod +x mvnw
+
+      - name: Mostrar versiones
+        run: |
+          java -version
+          ./mvnw -version
+
+      # --------------------------------------------------------
+      # Compilación y pruebas
+      # --------------------------------------------------------
+      - name: Compilar y ejecutar pruebas
+        run: ./mvnw -B clean verify
+
+      # --------------------------------------------------------
+      # Docker Compose
+      # --------------------------------------------------------
+      - name: Validar Docker Compose
+        run: |
+          docker compose \
+            -f CI-CD/deploy/docker/docker-compose.yml \
+            config
+
+      # --------------------------------------------------------
+      # Docker Buildx
+      # --------------------------------------------------------
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Construir imagen Docker
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: CI-CD/deploy/docker/Dockerfile
+          push: false
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # --------------------------------------------------------
+      # Seguridad
+      # --------------------------------------------------------
+      - name: Analizar vulnerabilidades con Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
