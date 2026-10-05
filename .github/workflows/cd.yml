@@ -1,4 +1,4 @@
-name: CD
+name: CD - Deploy to AWS
 
 on:
   workflow_dispatch:
@@ -29,25 +29,29 @@ concurrency:
 env:
   AWS_REGION: us-east-2
   PROJECT_NAME: liverpool-actuator
+  CONTAINER_NAME: actuator-demo
 
 jobs:
 
   # ==========================================================
-  # BUILD
+  # BUILD  
+  # Se ejecuta siempre, incluso en dry-run
+  # No publica ninguna imagen en AWS
   # ==========================================================
+
   build:
     name: Build container
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: CI-CD/deploy/docker/Dockerfile
@@ -58,13 +62,15 @@ jobs:
           tags: |
             ${{ env.PROJECT_NAME }}:${{ github.sha }}
 
-      - name: Show image
-        run: docker image inspect "${PROJECT_NAME}:${GITHUB_SHA}"
+      - name: Verify Docker image
+        run: |
+          docker image inspect "${PROJECT_NAME}:${GITHUB_SHA}"
+
 
   # ==========================================================
   # TERRAFORM VALIDATION
-  #
-  # No crea infraestructura. (para evitar costos a mi cuenta de AWS)
+  # Valida el ambiente seleccionado
+  # No crea infraestructura (para evitar costos en mi cuenta AWS)
   # ==========================================================
 
   terraform-validation:
@@ -73,7 +79,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -89,36 +95,42 @@ jobs:
 
   # ==========================================================
   # DEPLOYMENT PREVIEW
+  # Muestra los datos que se utilizarian durante el deployment
+  # deploy=false no utiliza AWS
   # ==========================================================
+
   deployment-preview:
     name: Deployment preview
     runs-on: ubuntu-latest
+
     needs:
       - build
       - terraform-validation
 
     steps:
-      - name: Deployment information
+      - name: Show deployment information
         run: |
           echo "Environment: ${{ inputs.environment }}"
           echo "Git SHA: ${{ github.sha }}"
-          echo "Docker image tag: ${{ github.sha }}"
+          echo "Image tag: ${{ github.sha }}"
           echo "Deploy requested: ${{ inputs.deploy }}"
 
       - name: Dry-run notice
         if: ${{ !inputs.deploy }}
         run: |
-          echo "Dry-run mode."
+          echo "Dry-run mode enabled."
+          echo "No AWS authentication will be performed."
           echo "No AWS resources will be created or modified."
 
+
   # ==========================================================
-  # REAL AWS DEPLOYMENT
-  #
-  # Solo puede ejecutarse:
-  # - manualmente
-  # - deploy=true
-  # - desde main
+  # AWS DEPLOYMENT
+  # Se ejecuta solamente cuando:  
+  # 1. El workflow fue iniciado manualmente
+  # 2. deploy=true
+  # 3. La ejecucion proviene de master
   # ==========================================================
+
   deploy:
     name: Deploy to AWS
     runs-on: ubuntu-latest
@@ -128,11 +140,7 @@ jobs:
       - terraform-validation
       - deployment-preview
 
-    if: |
-      inputs.deploy == true &&
-      github.ref == 'refs/heads/master'
-
-    environment: ${{ inputs.environment }}
+    if: ${{ inputs.deploy == true && github.ref == 'refs/heads/master' }}
 
     permissions:
       contents: read
@@ -140,17 +148,24 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      # ------------------------------------------------------
+      # OIDC
+      # Obtiene credenciales temporales
+      # No utiliza AWS_ACCESS_KEY_ID ni AWS_SECRET_ACCESS_KEY
+      # ------------------------------------------------------
 
       - name: Configure AWS credentials with OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: GitHubActions-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+      # ------------------------------------------------------
+      # VARIABLES
+      # ------------------------------------------------------
 
       - name: Define deployment variables
         shell: bash
@@ -158,24 +173,89 @@ jobs:
           echo "ECR_REPOSITORY=${PROJECT_NAME}-${{ inputs.environment }}" >> "$GITHUB_ENV"
           echo "ECS_CLUSTER=${PROJECT_NAME}-${{ inputs.environment }}-cluster" >> "$GITHUB_ENV"
           echo "ECS_SERVICE=${PROJECT_NAME}-${{ inputs.environment }}-service" >> "$GITHUB_ENV"
+          echo "TASK_FAMILY=${PROJECT_NAME}-${{ inputs.environment }}" >> "$GITHUB_ENV"
 
-      - name: Build and push immutable image
+      # ------------------------------------------------------
+      # ECR LOGIN
+      # ------------------------------------------------------
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ------------------------------------------------------
+      # BUILD + PUSH
+      # Cada imagen utiliza github.sha como tag inmutable
+      # ------------------------------------------------------
+
+      - name: Build and push immutable Docker image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        shell: bash
         run: |
+          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${GITHUB_SHA}"
+
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
+
           docker buildx build \
             --platform linux/amd64 \
             --provenance=false \
             --sbom=false \
             --file CI-CD/deploy/docker/Dockerfile \
-            --tag "${ECR_REGISTRY}/${ECR_REPOSITORY}:${GITHUB_SHA}" \
+            --tag "$IMAGE_URI" \
             --push \
             .
 
-      - name: Force ECS deployment
+      # ------------------------------------------------------
+      # DOWNLOAD CURRENT TASK DEFINITION
+      # Obtiene la revision actualmente utilizada como base
+      # ------------------------------------------------------
+
+      - name: Download current ECS task definition
+        shell: bash
         run: |
-          aws ecs update-service \
+          aws ecs describe-task-definition \
+            --task-definition "$TASK_FAMILY" \
+            --query taskDefinition \
+            --region "$AWS_REGION" \
+            > task-definition.json
+
+      # ------------------------------------------------------
+      # RENDER NEW TASK DEFINITION
+      # Sustituye solamente la imagen del container
+      # ------------------------------------------------------
+
+      - name: Render ECS task definition with new image
+        id: render-task-definition
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ env.CONTAINER_NAME }}
+          image: ${{ env.IMAGE_URI }}
+
+      # ------------------------------------------------------
+      # ECS DEPLOYMENT
+      # Registra una nueva revision de la Task Definition y
+      # actualiza el ECS Service
+      # ------------------------------------------------------
+
+      - name: Deploy ECS task definition
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-task-definition.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      # ------------------------------------------------------
+      # POST-DEPLOYMENT VERIFICATION
+      # ------------------------------------------------------
+
+      - name: Verify ECS service
+        shell: bash
+        run: |
+          aws ecs describe-services \
             --cluster "$ECS_CLUSTER" \
-            --service "$ECS_SERVICE" \
-            --force-new-deployment \
-            --region "$AWS_REGION"
+            --services "$ECS_SERVICE" \
+            --region "$AWS_REGION" \
+            --query "services[0].{Status:status,Desired:desiredCount,Running:runningCount,TaskDefinition:taskDefinition}"
